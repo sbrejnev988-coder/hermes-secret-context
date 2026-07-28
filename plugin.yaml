@@ -1,6 +1,6 @@
 name: secret-context
-version: 1.0.0
-description: "Vault-based secret injection for Hermes Agent — reads secrets_registry.json, injects redacted context on pre_llm_call, provides secret_context_lookup/list_aliases tools. No raw secrets ever in context — only redacted references."
+version: 2.1.0
+description: "Memory Wiki secret metadata lookup and metadata-only pre_llm_call injection. Never reads or returns ciphertext/plaintext."
 author: "sbrejnev988-coder"
 license: "MIT"
 
@@ -9,4 +9,4 @@ hooks:
 
 provides_tools:
   - secret_context_lookup
-  - secret_context_list_aliases
+  - secret_context_search
