@@ -10,29 +10,42 @@ VERSION = "2.2.0"
 
 
 def _load_core():
+    # HERMES-SECURITY-INTEGRATION-20260728: load only the pinned core file, never arbitrary sys.path modules.
     home = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
-    candidates = [
-        Path(os.environ.get("HERMES_SECRET_CORE_PATH", "")).expanduser() if os.environ.get("HERMES_SECRET_CORE_PATH") else None,
-        home / "lib",
-        Path(__file__).resolve().parent.parent.parent / "lib",
-    ]
-    for candidate in candidates:
-        if candidate and candidate.exists() and str(candidate) not in sys.path:
-            sys.path.insert(0, str(candidate))
-    from hermes_secret_core import MemorySecretIndex, inject_context, render_secret_context, require_version
-    require_version((2, 2, 0))
-    return MemorySecretIndex, inject_context, render_secret_context
+    lib = home / "lib"
+    if str(lib) not in sys.path:
+        sys.path.insert(0, str(lib))
+    from hermes_core_loader import load_secret_core
+    core = load_secret_core(("MemorySecretIndex",))
+    return core.MemorySecretIndex
 
 
 def _index():
-    MemorySecretIndex, _, _ = _load_core()
+    MemorySecretIndex = _load_core()
     return MemorySecretIndex()
+
+
+def _opaque_row(row: Any) -> dict[str, Any]:
+    if not isinstance(row, dict):
+        return {}
+    sid = str(row.get("secret_id") or row.get("id") or "")
+    if not sid.startswith("sec_"):
+        return {}
+    executors = row.get("allowed_executors") or row.get("executors") or []
+    if isinstance(executors, str):
+        executors = [executors]
+    return {
+        "secret_id": sid,
+        "scope": str(row.get("scope") or "executor-only")[:80],
+        "allowed_executors": [str(x)[:40] for x in executors][:5],
+        "plaintext_available_to_llm": False,
+    }
 
 
 def secret_context_lookup(secret_id: str, **_ignored: Any) -> dict[str, Any]:
     try:
         row = _index().get(str(secret_id or ""))
-        return row or {"error": "secret_not_found", "secret_id": secret_id}
+        return _opaque_row(row) if row else {"error": "secret_not_found", "secret_id": secret_id}
     except FileNotFoundError:
         return {"error": "memory_wiki_database_not_found"}
     except Exception:
@@ -41,7 +54,7 @@ def secret_context_lookup(secret_id: str, **_ignored: Any) -> dict[str, Any]:
 
 def secret_context_search(query: str, limit: int = 5) -> list[dict[str, Any]]:
     try:
-        return _index().search(query, limit)
+        return [safe for row in _index().search(query, limit) if (safe := _opaque_row(row))]
     except FileNotFoundError:
         return []
     except Exception:
@@ -50,7 +63,7 @@ def secret_context_search(query: str, limit: int = 5) -> list[dict[str, Any]]:
 
 def secret_context_list_aliases(limit: int = 200) -> list[dict[str, Any]]:
     try:
-        return _index().list_aliases(limit)
+        return [safe for row in _index().list_aliases(limit) if (safe := _opaque_row(row))]
     except Exception:
         return []
 
@@ -78,6 +91,7 @@ def _content_text(content: Any, *, limit: int = 6000) -> str:
     return "\n".join(chunks)[:limit]
 
 def pre_llm_call(messages: list[dict[str, Any]], **kwargs):
+    # HERMES-SECURITY-INTEGRATION-20260728: inject opaque sec_* handles only. Never inject aliases, hosts, logins or purpose text.
     user_text = ""
     for message in reversed(messages or []):
         if message.get("role") == "user":
@@ -85,9 +99,22 @@ def pre_llm_call(messages: list[dict[str, Any]], **kwargs):
             break
     if not user_text.strip():
         return [dict(m) for m in (messages or [])]
+    # Missing classification is not permission to disclose metadata.
+    policy = str(kwargs.get("provider_data_policy") or kwargs.get("data_policy") or "").lower()
+    if policy not in {"internal", "confidential"}:
+        return [dict(m) for m in (messages or [])]
     matches = secret_context_search(user_text, 5)
-    _, inject_context, render_secret_context = _load_core()
-    return inject_context(messages or [], render_secret_context(matches))
+    home = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
+    lib = home / "lib"
+    if str(lib) not in sys.path:
+        sys.path.insert(0, str(lib))
+    from hermes_trust_core import render_secret_handles
+    rendered = render_secret_handles(matches, limit=5)
+    if not rendered:
+        return [dict(m) for m in (messages or [])]
+    out = [dict(m) for m in (messages or [])]
+    out.insert(0, {"role": "system", "content": rendered})
+    return out
 
 
 def register(ctx):
