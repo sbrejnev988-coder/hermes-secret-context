@@ -1,0 +1,12 @@
+name: secret-context
+version: 1.0.0
+description: "Vault-based secret injection for Hermes Agent — reads secrets_registry.json, injects redacted context on pre_llm_call, provides secret_context_lookup/list_aliases tools. No raw secrets ever in context — only redacted references."
+author: "sbrejnev988-coder"
+license: "MIT"
+
+hooks:
+  - pre_llm_call
+
+provides_tools:
+  - secret_context_lookup
+  - secret_context_list_aliases
