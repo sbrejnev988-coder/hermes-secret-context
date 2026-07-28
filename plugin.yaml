@@ -1,5 +1,5 @@
 name: secret-context
-version: 2.1.0
+version: 2.2.0
 description: "Memory Wiki secret metadata lookup and metadata-only pre_llm_call injection. Never reads or returns ciphertext/plaintext."
 author: "sbrejnev988-coder"
 license: "MIT"
